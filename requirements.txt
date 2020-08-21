@@ -9,3 +9,5 @@ tensorboard>=2.0.0
 tensorboardX>=1.9
 tqdm>=4.30.0
 wandb
+torch==1.6.0
+torchvision==0.7.0

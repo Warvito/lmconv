@@ -214,14 +214,11 @@ def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask
     masks_unf = masks.view(1, nrows * ncols, -1).transpose(1, 2)
     return masks_unf
 
-def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: int=1, observed_idx=None, out_dir: str="/tmp", plot_suffix="", plot=True):
+def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: int=1, observed_idx=None):
     """Get and plot three masks: mask type A for first layer, mask type B for later layers, and mask type B with dilation.
     Masks are copied to GPU and repeated along the batch dimension torch.cuda.device_count() times for DataParallel support."""
     mask_init = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='A', observed_idx=observed_idx)
     mask_undilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='B', observed_idx=observed_idx)
-    if plot:
-        plot_unfolded_masks(nrows, ncols, generation_idx, mask_init, k=k, out_path=os.path.join(out_dir, f"mask_init_{plot_suffix}.pdf"))
-        plot_unfolded_masks(nrows, ncols, generation_idx, mask_undilated, k=k, out_path=os.path.join(out_dir, f"mask_undilated_{plot_suffix}.pdf"))
     mask_init = mask_init.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
     mask_undilated = mask_undilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
@@ -229,8 +226,6 @@ def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: in
         mask_dilated = mask_undilated
     else:
         mask_dilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=max_dilation, mask_type='B', observed_idx=observed_idx)
-        if plot:
-            plot_unfolded_masks(nrows, ncols, generation_idx, mask_dilated, k=k, out_path=os.path.join(out_dir, f"mask_dilated_d{max_dilation}_{plot_suffix}.pdf"))
         mask_dilated = mask_dilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
     return mask_init, mask_undilated, mask_dilated

@@ -1,15 +1,13 @@
 import logging
 import math
-import pdb
 
-import numpy as np
 import torch 
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm as wn
 
-from utils import * 
+from utils import down_shift, right_shift, concat_elu
 
 logger = logging.getLogger("gen")
 

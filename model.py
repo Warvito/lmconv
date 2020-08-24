@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.nn.utils import weight_norm as wn
 
 from layers import gated_resnet, identity, nin
 from locally_masked_convolution import locally_masked_conv2d
 from utils import concat_elu
+from utils import discretized_mix_logistic_loss_1d
 
 
 class OurPixelCNNLayer_up(nn.Module):
@@ -44,28 +44,38 @@ class OurPixelCNNLayer_down(nn.Module):
 class OurPixelCNN(nn.Module):
     def __init__(self, nr_resnet=5, nr_filters=80, nr_logistic_mix=10,
                  resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5, 5),
-                 max_dilation=2, weight_norm=True, feature_norm_op=None, dropout_prob=0.5, conv_bias=True,
+                 max_dilation=2, feature_norm_op=None, dropout_prob=0.5, conv_bias=True,
                  conv_mask_weight=False):
         super(OurPixelCNN, self).__init__()
         assert resnet_nonlinearity == 'concat_elu'
         self.resnet_nonlinearity = lambda x: concat_elu(x)
         self.init_padding = None
 
-        if weight_norm:
-            conv_op_init = lambda cin, cout: wn(locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight))
-            conv_op_dilated = lambda cin, cout: wn(locally_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation, bias=conv_bias, mask_weight=conv_mask_weight))
-            conv_op = lambda cin, cout: wn(locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight))
-        else:
-            conv_op_init = lambda cin, cout: locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight)
-            conv_op_dilated = lambda cin, cout: locally_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation, bias=conv_bias, mask_weight=conv_mask_weight)
-            conv_op = lambda cin, cout: locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight)
+        conv_op_init = lambda cin, cout: locally_masked_conv2d(cin, cout,
+                                                               kernel_size=kernel_size,
+                                                               bias=conv_bias, mask_weight=conv_mask_weight)
+
+        conv_op_dilated = lambda cin, cout: locally_masked_conv2d(cin, cout,
+                                                                  kernel_size=kernel_size, dilation=max_dilation,
+                                                                  bias=conv_bias, mask_weight=conv_mask_weight)
+
+        conv_op = lambda cin, cout: locally_masked_conv2d(cin, cout,
+                                                          kernel_size=kernel_size,
+                                                          bias=conv_bias, mask_weight=conv_mask_weight)
 
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
-        self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters, self.resnet_nonlinearity, conv_op,
-                                                feature_norm_op, dropout_prob=dropout_prob) for i in range(3)])
+        self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i],
+                                                                nr_filters,
+                                                                self.resnet_nonlinearity,
+                                                                conv_op,
+                                                                feature_norm_op,
+                                                                dropout_prob=dropout_prob) for i in range(3)])
 
-        self.up_layers = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters, self.resnet_nonlinearity, conv_op,
-                                                feature_norm_op, dropout_prob=dropout_prob) for _ in range(3)])
+        self.up_layers = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters,
+                                                            self.resnet_nonlinearity,
+                                                            conv_op,
+                                                            feature_norm_op,
+                                                            dropout_prob=dropout_prob) for _ in range(3)])
 
         self.u_init = conv_op_init(input_channels + 1, nr_filters)
         self.downsize_u_stream = nn.ModuleList([conv_op_dilated(nr_filters, nr_filters) for _ in range(2)])
@@ -119,3 +129,8 @@ class OurPixelCNN(nn.Module):
         x_out = self.nin_out(F.elu(u))
 
         return x_out
+
+    def loss(self, x, mask_init=None, mask_undilated=None, mask_dilated=None):
+        x_out = self.forward(x, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
+        loss = discretized_mix_logistic_loss_1d(x, x_out)
+        return loss

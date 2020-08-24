@@ -103,12 +103,10 @@ if ema < 1:
     ema = EMA(ema)
     ema.register(model)
 
-def test(model, all_masks, test_loader, epoch="N/A", sliced_obs=dataset_obs):
+def test(model, all_masks, test_loader, epoch="N/A"):
     test_loss = 0.
     pbar = tqdm.tqdm(test_loader, desc=f"Test after epoch {epoch}")
-    num_images = 0
     for batch_idx, (input, _) in enumerate(pbar):
-        num_images += input.shape[0]
         input = input.cuda()
 
         # Average likelihoods over multiple orderings
@@ -122,13 +120,9 @@ def test(model, all_masks, test_loader, epoch="N/A", sliced_obs=dataset_obs):
         test_loss += loss.item()
         del loss, output
 
-        deno = num_images * np.prod(sliced_obs) * np.log(2.)
-        pbar.set_description(f"Test after epoch {epoch} {test_loss / deno}")
+        pbar.set_description(f"Test after epoch {epoch} {test_loss}")
 
-    deno = num_images * np.prod(sliced_obs) * np.log(2.)
-    assert deno > 0, embed()
-    test_bpd = test_loss / deno
-    return test_bpd
+    return test_loss
 
 
 def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, obs):
@@ -160,16 +154,8 @@ for epoch in range(1, max_epochs):
     for batch_idx, (input, _) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}")):
         input = input.cuda()  # [-1, 1] range images
 
-        obs = input.shape[1:]
-        all_masks = [masks]
-        order_i = np.random.randint(len(all_masks))
-        mask_init, mask_undilated, mask_dilated = all_masks[order_i]
-        output = model(input, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
-
-        loss = loss_op(input, output)
-        deno = batch_size * np.prod(obs) * np.log(2.)
-        assert deno > 0, embed()
-        train_bpd = loss / deno
+        mask_init, mask_undilated, mask_dilated = masks
+        loss = model.loss(input, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
 
         optimizer.zero_grad()
         loss.backward()
@@ -181,15 +167,8 @@ for epoch in range(1, max_epochs):
             ema.update(model)
         train_loss += loss.item()
 
-        writer.add_scalar('train/bpd', train_bpd.item(), global_step)
-        min_train_bpd = min(min_train_bpd, train_bpd.item())
-        writer.add_scalar('train/min_bpd', min_train_bpd, global_step)
-
         if (batch_idx + 1) % print_every == 0:
-            deno = print_every * batch_size * np.prod(obs) * np.log(2.)
-            average_bpd = train_loss / deno
-            logger.info('train bpd : {:.4f}, train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
-                average_bpd,
+            logger.info('train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
                 train_loss / print_every,
                 (time.time() - time_),
                 global_step))
@@ -205,20 +184,13 @@ for epoch in range(1, max_epochs):
 
         if (epoch + 1) % test_interval == 0:
             # test with all masks
-            test_bpd = test(model,
+            test_loss = test(model,
                             [masks],
                             test_loader,
                             epoch)
-            writer.add_scalar(f'test/bpd', test_bpd, global_step)
-            logger.info(f"test loss : %s bpd" % test_bpd)
-            save_dict[f"test_loss"] = test_bpd
-
-            # Log min test bpd for smoothness
-            min_test_bpd_by_obs = min(min_test_bpd_by_obs, test_bpd)
-            writer.add_scalar(f'test/min_bpd', min_test_bpd_by_obs, global_step)
 
         # Save checkpoint so we have checkpoints every save_interval epochs, as well as a rolling most recent checkpoint
-        save_path = os.path.join(run_dir, f"{exp_id}_ep{epoch}.pth")
+        save_path = os.path.join(run_dir, f"ep{epoch}.pth")
         logger.info('saving model to %s...', save_path)
         save_dict["epoch"] = epoch
         save_dict["global_step"] = global_step
@@ -240,7 +212,7 @@ for epoch in range(1, max_epochs):
                 sample_t = sample(model,
                                   generation_idx,
                                   *all_masks[sample_order_i],
-                                  obs)
+                                  input.shape[1:])
                 sample_save_path = os.path.join(run_dir, f"tsample_obs_{epoch}_order{sample_order_i}.png")
                 utils.save_image(sample_t, sample_save_path, nrow=4, padding=5, pad_value=1, scale_each=False)
             except Exception as e:
